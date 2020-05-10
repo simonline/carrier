@@ -110,6 +110,11 @@ pub fn build_cli() -> App<'static, 'static> {
             .arg(Arg::with_name("v").short("v").takes_value(true).required(false)),
             )
         .subcommand(
+            SubCommand::with_name("sensors")
+            .about("get sensors")
+            .arg(Arg::with_name("target").takes_value(true).required(true).index(1))
+            )
+        .subcommand(
             SubCommand::with_name("locate")
             .about("get GPS/GNSS location")
             .arg(Arg::with_name("target").takes_value(true).required(true).index(1))

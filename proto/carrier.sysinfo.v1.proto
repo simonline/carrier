@@ -269,7 +269,7 @@ message Sensor {
     };
 
     ValueType vtype = 2;
-    double value = 3;
+    uint64 value = 3;
 }
 
 message Sensors {

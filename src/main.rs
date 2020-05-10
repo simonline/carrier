@@ -99,52 +99,19 @@ pub fn _main() -> Result<(), Error> {
             println!("{}", config.secret.sign(purpose.as_bytes(), &text));
             Ok(())
         }
-        ("authorize", Some(submatches)) => {
-            let config = carrier::config::load()?;
-            if let Some(identity) = submatches.value_of("identity") {
-                let mut headers = carrier::headers::Headers::with_path("/v2/carrier.certificate.v1/authorize");
-                headers.add(":method".into(),  "POST".into());
-                headers.add("identity".into(), identity.to_string().as_bytes().to_vec());
-                headers.add("resource".into(), "*".into());
+        ("config", Some(submatches)) => {
+            match submatches.subcommand() {
+                ("authorize", Some(submatches2)) => {
+                    let identity : carrier::identity::Identity   = submatches2.value_of("identity").unwrap().parse().expect("parsing identity");
+                    let resource    = submatches2.value_of("resource").unwrap().to_string();
+                    if let Some(target) = submatches.value_of("identity") {
 
-                let target = config
-                    .resolve_identity(submatches.value_of("identity_or_target").unwrap().to_string())
-                    .expect("resolving identity from cli");
-
-                carrier::connect(config).open(target, headers, print_handler).run()
-            } else {
-                let identity = submatches
-                    .value_of("identity_or_target")
-                    .unwrap()
-                    .to_string()
-                    .parse()
-                    .expect("parsing identity");
-                carrier::config::authorize(identity, "*".to_string())
+                    }
+                },
+                _ => unreachable!(),
             }
+            Ok(())
         }
-        ("deauthorize", Some(submatches)) => {
-            let config = carrier::config::load()?;
-            if let Some(identity) = submatches.value_of("identity") {
-                let mut headers = carrier::headers::Headers::with_path("/v2/carrier.certificate.v1/authorize");
-                headers.add(":method".into(),  "DELETE".into());
-                headers.add("identity".into(), identity.to_string().as_bytes().to_vec());
-
-                let target = config
-                    .resolve_identity(submatches.value_of("identity_or_target").unwrap().to_string())
-                    .expect("resolving identity from cli");
-
-                carrier::connect(config).open(target, headers, print_handler).run()
-            } else {
-                let identity = submatches
-                    .value_of("identity_or_target")
-                    .unwrap()
-                    .to_string()
-                    .parse()
-                    .expect("parsing identity");
-                carrier::config::deauthorize(identity)
-            }
-        }
-
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android",))]
         ("publish", Some(_submatches)) => {
             let poll = osaka::Poll::new();
@@ -220,6 +187,17 @@ pub fn _main() -> Result<(), Error> {
                         ),
             }
             .run()
+        }
+        ("sensors", Some(submatches)) => {
+            let config = carrier::config::load()?;
+            let target = config
+                .resolve_identity(submatches.value_of("target").unwrap().to_string())
+                .expect("resolving identity from cli");
+
+            carrier::connect(config).open(
+                target,
+                carrier::headers::Headers::with_path("/v2/carrier.sysinfo.v1/sensors"),
+                message_handler::<carrier::proto::Sensors>).run()
         }
         ("trace", Some(submatches)) => {
             let config = carrier::config::load()?;

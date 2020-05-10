@@ -137,7 +137,7 @@ impl PublisherBuilder {
         let with_disco = self.with_disco;
         let routes: &'static HashMap<String, RouteHandler> = Box::leak(Box::new(self.routes));
         let publish_config = self.config.publish.expect("missing publish section in config");
-        ep.publish(publish_config.shadow.clone(),
+        ep.publish(publish_config.address.clone(),
             self.on_pub.unwrap_or(Box::new(||())),
             self.on_unpub.unwrap_or(Box::new(||panic!("publish closed"))),
         )?;

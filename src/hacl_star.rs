@@ -3,12 +3,10 @@ use snow::params::{DHChoice, HashChoice, CipherChoice};
 use snow::types::{Random, Dh, Hash, Cipher};
 use identity;
 use error;
-
-#[path = "../target/release/rs/carrier_cipher.rs"]
-mod cipher;
-
-#[ path = "../target/release/rs/carrier_sha256.rs"]
-mod sha256;
+use super::zz::{
+    carrier_sha256 as sha256,
+    carrier_cipher as cipher,
+};
 
 #[derive(Default)]
 pub struct HaclStarResolver;

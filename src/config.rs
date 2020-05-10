@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 use std::mem;
 use toml;
 use std::os::unix::fs::OpenOptionsExt;
-
+use mtdparts::parse_mtd;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Protocol {
@@ -37,16 +37,15 @@ pub struct AuthorizationToml {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct PublisherConfigToml {
-    shadow: String,
-    secret: Option<String>,
+pub struct NetworkConfigToml {
+    address:    String,
+    secret:     Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct SubscriberConfigToml {
-    shadow: String,
-    secret: Option<String>,
-    group:  Option<String>,
+pub struct PublisherConfigToml {
+    shadow:  String,
+    secret:  Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,9 +62,9 @@ pub struct ConfigToml {
     pub keepalive: Option<u16>,
     pub clock:     Option<String>,
     pub port:      Option<u16>,
+    pub network:   Option<NetworkConfigToml>,
     pub publish:   Option<PublisherConfigToml>,
     pub names:     Option<HashMap<String, String>>,
-    pub subscribe: Option<SubscriberConfigToml>,
     pub authorize: Option<Vec<AuthorizationToml>>,
     pub axons:     Option<Vec<Axon>>,
     pub protocol:  Option<Protocol>,
@@ -117,6 +116,89 @@ pub fn persistence_dir() -> std::path::PathBuf {
 impl ConfigToml {
     fn secret(o: Option<&String>) -> Result<identity::Secret, Error> {
         if let Some(ref s) = o {
+            if s.starts_with(":") {
+                let mut fu_brwcheck: String;
+                let mut s: Vec<&str> = s.split(":").collect();
+
+                if s.get(1) == Some(&"mtdname") || s.get(1) == Some(&"mtdblock") {
+                    if let Some(name) = s.get(2).map(|v| v.to_string()) {
+                        let f = File::open("/proc/mtd").expect("open /proc/mtd");
+                        let names = parse_mtd(f).expect("parsing /proc/mtd");
+                        let dev = names.get(&name).expect(&format!("mtd partition {} not found", name));
+                        fu_brwcheck = format!("/dev/{}", dev);
+
+                        if s.get(1) == Some(&"mtdblock") {
+                            if !fu_brwcheck.contains("mtdblock") {
+                                fu_brwcheck = fu_brwcheck.replace("mtd", "mtdblock");
+                            }
+                        }
+                        s[1] = "mtd";
+                        s[2] = &fu_brwcheck;
+                    }
+                }
+
+                if s.get(1) == Some(&"mtd") {
+                    if let Some(mtd) = s.get(2) {
+                        info!("reading secret from mtd {}", mtd);
+                        let offset = s.get(3).and_then(|v| v.parse().ok()).unwrap_or(40);
+                        let mut f = OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(mtd)
+                            .expect(&format!("cannot open {}", mtd));
+                        f.seek(SeekFrom::Start(offset))?;
+                        let mut b = [0u8; 32];
+                        f.read_exact(&mut b)?;
+
+                        if b == [0xff; 32] || b == [0x0; 32] {
+                            f.seek(SeekFrom::Start(offset))?;
+                            firstgen_identity(&mut b);
+                            f.write(&b)?;
+                        }
+                        return Ok(identity::Secret::from_array(b));
+                    }
+                } else if s.get(1) == Some(&"efi") {
+                #[cfg(feature = "uefi")]
+                {
+                    info!("reading secret from UEFI");
+                    let path = "/sys/firmware/efi/efivars/DevguardIdentity-287d44ea-82f4-11e9-bd4d-d0509993593e";
+
+                    if std::fs::metadata(path).is_err() {
+                        let mut b = [0u8; 68];
+                        b[0] = 0x7;
+                        firstgen_identity(&mut b[4..]);
+                        let mut f = OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .open(path)
+                            .expect(&format!("cannot open {}", path));
+                        f.write(&b)?;
+                    }
+
+                    let mut f = OpenOptions::new()
+                        .read(true)
+                        .open(path)
+                        .expect(&format!("cannot open {}", path));
+
+                    let mut bb = [0u8; 68];
+                    f.read_exact(&mut bb)?;
+                    let mut b = [0u8; 32];
+                    b.copy_from_slice(&bb[4..36]);
+
+                    if let Some(xor) = s.get(2) {
+                        let s2: identity::Secret = xor.parse()?;
+                        let b2 = s2.as_bytes();
+                        for i in 0..32 {
+                            b[i] ^= b2[i];
+                        }
+                    }
+
+                    return Ok(identity::Secret::from_array(b));
+                }
+
+                return Err(Error::NoSecrets);
+            }}
+
             let s: identity::Secret = s.parse()?;
             return Ok(s);
         }
@@ -124,14 +206,14 @@ impl ConfigToml {
     }
 
     fn publisher(&mut self, identity: identity::Identity) -> Result<Option<PublisherConfig>, Error> {
-        let publish = match &self.publish {
-            None => return Ok(None),
-            Some(v) => v,
+
+        let address = match (&self.publish, &self.network) {
+            (Some(a), _)    => a.shadow.parse::<identity::Address>()?,
+            (None, Some(a)) => a.address.parse::<identity::Address>()?,
+            (None, None)    => panic!("publish config missing network="),
         };
 
-        let shadow = publish.shadow.parse::<identity::Address>()?;
-
-        let mut auth = certificate::Authenticator::new(identity, shadow.clone());
+        let mut auth = certificate::Authenticator::new(identity, address.clone());
         if let Some(authorize) = mem::replace(&mut self.authorize, None) {
             for i in authorize {
                 match i.identity.parse() {
@@ -145,22 +227,17 @@ impl ConfigToml {
             }
         }
 
-        Ok(Some(PublisherConfig { shadow, auth }))
+        Ok(Some(PublisherConfig { address, auth }))
     }
 
     fn subscriber(&mut self) -> Result<Option<SubscriberConfig>, Error> {
-        let subscribe = match &self.subscribe {
-            None => return Ok(None),
-            Some(v) => v,
+        let address = match (&self.publish, &self.network) {
+            (Some(a), _)    => a.shadow.parse::<identity::Address>()?,
+            (None, Some(a)) => a.address.parse::<identity::Address>()?,
+            (None, None)    => panic!("publish config missing network="),
         };
 
-        let shadow = subscribe.shadow.parse::<identity::Address>()?;
-        let group = subscribe
-            .group
-            .as_ref()
-            .map(|v| v.parse::<identity::Secret>().expect("parsing subscribe.group"));
-
-        Ok(Some(SubscriberConfig { shadow, group }))
+        Ok(Some(SubscriberConfig { address }))
     }
 
     fn names(&mut self) -> Result<HashMap<String, identity::Identity>, Error> {
@@ -218,14 +295,13 @@ pub struct Authorization {
 
 #[derive(Debug, Clone)]
 pub struct PublisherConfig {
-    pub shadow: identity::Address,
-    pub auth:   certificate::Authenticator,
+    pub address:    identity::Address,
+    pub auth:       certificate::Authenticator,
 }
 
 #[derive(Debug, Clone)]
 pub struct SubscriberConfig {
-    pub shadow: identity::Address,
-    pub group:  Option<identity::Secret>,
+    pub address: identity::Address,
 }
 
 #[derive(Clone, Debug)]
@@ -332,16 +408,16 @@ pub fn setup() -> Result<(), Error> {
 
     if config.publish.is_none() {
         let xsecret = identity::Secret::gen();
-        config.publish = Some(PublisherConfigToml{
-            shadow: xsecret.address().to_string(),
-            secret: Some(xsecret.to_string()),
+        config.network = Some(NetworkConfigToml{
+            address: xsecret.address().to_string(),
+            secret:  Some(xsecret.to_string()),
         });
     }
 
     let secret: identity::Secret = config.secret.as_ref().unwrap().parse().unwrap();
     println!("identity: {}", secret.identity());
 
-    let shadow : identity::Address = config.publish.as_ref().unwrap().shadow.parse().unwrap();
+    let shadow : identity::Address = config.network.as_ref().unwrap().address.parse().unwrap();
     println!("shadow: {}", shadow);
     if let Some(secret) = &config.publish.as_ref().unwrap().secret {
         let secret : identity::Secret = secret.parse().unwrap();
@@ -470,3 +546,28 @@ pub fn deauthorize(identity: identity::Identity) -> Result<(), Error> {
     Ok(())
 }
 
+
+
+
+pub static mut IDENTITY_GENERATOR: Option<Box<Fn(&mut[u8])>> = None;
+
+fn firstgen_identity(b: &mut [u8]) {
+    unsafe {
+        if let Some(cb) = &mut IDENTITY_GENERATOR {
+            cb(b);
+        }
+    }
+
+    if b == [0xff; 32] || b == [0x0; 32] {
+        panic!("secret file is zero and IDENTITY_GENERATOR is not set or not working. check your system specific carrier manual why identity might be missing");
+    }
+}
+
+pub fn default_identity_generator(b: &mut [u8]) {
+    use error;
+    let mut err = error::ZZError::new();
+    unsafe {
+        super::zz::carrier_rand::rand(err.as_mut_ptr(), error::ZERR_TAIL, b.as_mut_ptr(), b.len());
+    }
+    err.check().unwrap();
+}

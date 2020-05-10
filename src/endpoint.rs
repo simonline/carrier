@@ -466,7 +466,7 @@ impl Endpoint {
         debug!("ConnectResponse {:#?}", cr.paths);
 
         let pkt = EncryptedPacket::decode(&cr.handshake)?;
-        let hs_identity = requester.recv_response(pkt)?;
+        let hs_identity = requester.recv_response(pkt).unwrap();
         let noise = requester.into_transport()?;
 
         if identity != hs_identity {
@@ -1226,41 +1226,37 @@ impl EndpointBuilder {
             records.push(record.clone());
         }
 
-        if let Some(true) = self.protocol.tcp {
-            // try tcp
-            loop {
+        // try tcp
+        loop {
 
-                let mut record = match records.pop() {
-                    Some(v) => v,
-                    None => return Err(Error::OutOfOptions),
-                };
+            let mut record = match records.pop() {
+                Some(v) => v,
+                None => return Err(Error::OutOfOptions),
+            };
 
-                info!("attempting tcp connection with {}", &record.addr);
-                let guard = super::tcp::spawn(record.addr);
-                record.addr = guard.addr;
+            info!("attempting tcp connection with {}", &record.addr);
+            let guard = super::tcp::spawn(record.addr);
+            record.addr = guard.addr;
 
-                let mut v = self.clone().connect_to(poll.clone(), record);
-                match osaka::sync!(v) {
-                    Err(e) => return Err(e),
-                    Ok((Some(mut ep), _)) => {
-                        ep.tcp_bridge = Some(guard);
-                        return Ok(ep);
-                    }
-                    Ok((None, None)) => continue,
-                    Ok((None, Some(mut record))) => {
-                        records.push(record.clone());
-                        record.addr.set_port(443);
-                        records.push(record.clone());
-                        record.addr.set_port(53);
-                        records.push(record.clone());
-                        record.addr.set_port(123);
-                        records.push(record.clone());
-                        continue;
-                    }
+            let mut v = self.clone().connect_to(poll.clone(), record);
+            match osaka::sync!(v) {
+                Err(e) => return Err(e),
+                Ok((Some(mut ep), _)) => {
+                    ep.tcp_bridge = Some(guard);
+                    return Ok(ep);
+                }
+                Ok((None, None)) => continue,
+                Ok((None, Some(mut record))) => {
+                    records.push(record.clone());
+                    record.addr.set_port(443);
+                    records.push(record.clone());
+                    record.addr.set_port(53);
+                    records.push(record.clone());
+                    record.addr.set_port(123);
+                    records.push(record.clone());
+                    continue;
                 }
             }
-        } else {
-            return Err(Error::OutOfOptions);
         }
 
     }

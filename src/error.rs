@@ -5,28 +5,22 @@ use snow::SnowError;
 use std::fmt;
 use std::io;
 
-
+use super::zz::err;
 
 pub struct ZZError  (pub Vec<u8>);
-
-#[path = "../target/release/rs/err.rs"]
-mod err;
-
 
 pub const ZERR_TAIL : usize = 1000;
 
 impl ZZError {
     pub fn new() -> Self {
-        Self(vec![0;unsafe{err::sizeof_Err} + ZERR_TAIL])
+        Self(vec![0;unsafe{err::sizeof_Err(ZERR_TAIL)}])
     }
     pub fn as_mut_ptr(&mut self) -> *mut u8{
         self.0.as_mut_ptr()
     }
     pub fn check(&mut self) -> Result<(), Error> {
         unsafe {
-            let this_file = file!();
-            let this_line = line!();
-            let e = err::check(self.as_mut_ptr(), ZERR_TAIL, this_file.as_bytes().as_ptr(), std::ptr::null(), this_line as usize);
+            let e = err::check(self.as_mut_ptr(), ZERR_TAIL, std::ptr::null(), std::ptr::null(), 0);
             if e  {
                 let mut s = [0u8;1024];
                 err::to_str(self.as_mut_ptr(), s.as_mut_ptr(), s.len());
@@ -39,7 +33,6 @@ impl ZZError {
 }
 
 
-#[derive(Debug)]
 pub enum Error {
     Io(io::Error),
     Snow(SnowError),
@@ -109,6 +102,12 @@ impl std::error::Error for Error {
             Error::Fmt(e)       => Some(e),
             _ => None,
         }
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+         write!(f, "{}", self.to_string())
     }
 }
 

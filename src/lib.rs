@@ -77,3 +77,8 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/carrier.discovery.v1.rs"));
     include!(concat!(env!("OUT_DIR"), "/genesis.v1.rs"));
 }
+
+
+#[path = "../../carrier/target/release/rs/lib.rs"]
+mod zz;
+

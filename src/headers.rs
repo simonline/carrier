@@ -1,55 +1,12 @@
 use std::fmt;
 use std::iter::Iterator;
 use error;
-
-
-#[path = "../target/release/rs/slice_mut_slice.rs"]
-mod mut_slice;
-
-#[path = "../target/release/rs/hpack_encoder.rs"]
-mod hpack_encoder;
-
-extern {
-    pub fn hpack_decoder_decode(
-        Ze: *mut u8,
-        Zet: usize,
-        Zwire: *const u8,
-        Zl: usize,
-        Zcb: extern fn(
-            e:      *mut u8,
-            et:     usize,
-            user:   *mut Headers,
-            key:    *const u8,
-            keylen: usize,
-            val:    *const u8,
-            vallen: usize,
-        ),
-        Zuser: *mut Headers
-    );
-}
-
-
-extern "C" fn rs_hpack_decoder_callback(
-    e:      *mut u8,
-    et:     usize,
-    user:   *mut Headers,
-    key:    *const u8,
-    keylen: usize,
-    val:    *const u8,
-    vallen: usize,
-    )
-{
-    let mut rs_key = vec![0; keylen];
-    let mut rs_val = vec![0; vallen];
-
-    unsafe {
-        std::ptr::copy(key, rs_key.as_mut_ptr(), keylen);
-        std::ptr::copy(val, rs_val.as_mut_ptr(), vallen);
-        (*user).f.push((rs_key,rs_val));
-    }
-}
-
-
+use super::zz::{
+    slice_mut_slice as mut_slice,
+    slice_slice as slice,
+    hpack_encoder,
+    hpack_decoder,
+};
 
 #[derive(Default, Clone)]
 pub struct Headers {
@@ -144,26 +101,29 @@ impl Headers {
         let mut err = error::ZZError::new();
 
         let mut mem     = vec![0;2000];
-        let mut slice   = mut_slice::MutSlice::new();
+        let mut slice   = mut_slice::rsMutSlice::new();
         unsafe {
             mut_slice::make(slice._self_mut(), mem.as_mut_ptr(), mem.len());
         }
 
         let mut at = 0;
         for (k,v) in &self.f {
-            unsafe{hpack_encoder::encode(
-                slice._self_mut(),
+            unsafe{
+                hpack_encoder::encode(
+                    slice._self_mut(),
 
-                err.as_mut_ptr(),
-                error::ZERR_TAIL,
+                    err.as_mut_ptr(),
+                    error::ZERR_TAIL,
 
-                k.as_ptr(),
-                k.len(),
+                    k.as_ptr(),
+                    k.len(),
 
-                v.as_ptr(),
-                v.len())
+                    v.as_ptr(),
+                    v.len()
+                );
+                at = slice.inner.at;
             };
-            at = slice.inner.at;
+
             err.check().unwrap();
         }
         mem.truncate(at);
@@ -172,16 +132,26 @@ impl Headers {
 
     pub fn decode(b: &[u8]) -> Result<Self, error::Error> {
         let mut nu = Self::default();
-
         let mut err = error::ZZError::new();
-        unsafe{hpack_decoder_decode(
-                err.as_mut_ptr(),
-                error::ZERR_TAIL,
-                b.as_ptr(),
-                b.len(),
-                rs_hpack_decoder_callback,
-                (&mut nu),
-        )};
+
+        let mut slice = slice::rsSlice::new();
+        unsafe {
+            slice::make(slice._self_mut(), b.as_ptr(), b.len());
+        }
+
+        let mut decoder = hpack_decoder::rsIterator::new();
+        unsafe {
+            hpack_decoder::decode(decoder._self_mut(), slice._self());
+        }
+
+        unsafe {
+            while hpack_decoder::next(decoder._self_mut(), err.as_mut_ptr(), error::ZERR_TAIL)
+            {
+                let k = std::slice::from_raw_parts(decoder.key.mem, decoder.key.size).to_vec();
+                let v = std::slice::from_raw_parts(decoder.val.mem, decoder.val.size).to_vec();
+                nu.f.push((k, v));
+            }
+        }
 
 
         err.check()?;

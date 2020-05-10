@@ -180,8 +180,7 @@ impl Builder {
             .expect("broker con");
 
         let subconf = config.subscribe.expect("[subscribe] must be set");
-        let shadow = subconf.shadow;
-        let group = subconf.group;
+        let shadow = subconf.address;
         let broker = ep.broker();
 
         let state = Arc::new(Mutex::new(ConduitState {
@@ -199,16 +198,8 @@ impl Builder {
             |poll, mut stream| {
                 stream.message(proto::SubscribeRequest {
                     shadow:          shadow.as_bytes().to_vec(),
-                    group_identity:  group
-                        .as_ref()
-                        .map(|v| v.identity().as_bytes().to_vec())
-                        .unwrap_or(Vec::new()),
-                        group_signature: group
-                            .as_ref()
-                            .map(|v| {
-                                v.sign(b"subscribegroup", shadow.as_bytes()).as_bytes().to_vec()
-                            })
-                    .unwrap_or(Vec::new()),
+                    group_identity:  Vec::new(),
+                    group_signature: Vec::new(),
                 });
                 subscribe_handler(poll, stream, handle, state.clone(), i, mt, f)
             },

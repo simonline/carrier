@@ -18,8 +18,9 @@ pub struct SignedAddress(Address, Signature);
 
 // --- Secret
 
-#[path = "../target/release/rs/carrier_identity.rs"]
-mod carrier_identity;
+
+use super::zz::carrier_identity;
+
 
 impl Secret {
     pub fn identity(&self) -> Identity {
